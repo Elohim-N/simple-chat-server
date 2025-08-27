@@ -34,22 +34,33 @@ public class Server {
  * @param clientSocket 客户端的Socket连接
  */
     private static void handleClient(Socket clientSocket) {
-        // 注意：这个方法是运行在线程池中的某个线程里，而不是主线程！
         String clientName = clientSocket.getRemoteSocketAddress().toString();
         try {
             logger.info("[{}] 开始处理这个客户端的请求。", clientName);
 
-            // TODO: 这里将来会添加读取客户端消息的逻辑
-            // 现在我们先模拟一个耗时操作
-            Thread.sleep(5000); // 模拟处理业务用了5秒
+            // 循环读取客户端发送的消息
+            Message clientMessage;
+            while ((clientMessage = NetworkUtils.receiveMessage(clientSocket)) != null) {
+                // 处理消息：打印日志
+                logger.info("[{}] 收到消息: [{}] {}", clientName, 
+                    clientMessage.getSender().getUsername(), 
+                    clientMessage.getContent());
 
-            logger.info("[{}] 请求处理完毕。", clientName);
+                // 构建并发送回复消息
+                User serverUser = new User("server", "ChatServer");
+                Message responseMessage = new Message(serverUser, 
+                    "服务器已收到您的消息: '" + clientMessage.getContent() + "'");
+                NetworkUtils.sendMessage(clientSocket, responseMessage);
+                logger.info("[{}] 已发送回复。", clientName);
+            }
+            
+            logger.info("[{}] 客户端断开连接。", clientName);
 
-        } catch (Exception e) {
+        } catch (IOException e) {
             logger.error("[{}] 处理请求时发生异常", clientName, e);
         } finally {
             try {
-                clientSocket.close(); // 处理完毕，关闭连接
+                clientSocket.close();
             } catch (IOException e) {
                 logger.error("[{}] 关闭连接时发生异常", clientName, e);
             }
