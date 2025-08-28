@@ -5,6 +5,8 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -29,8 +31,49 @@ public class Server {
     //         new LinkedBlockingQueue<>(500) // 工作队列：大小500，而不是无界队列
     // );
 
+    // 新增：在线客户端映射表
+    // Key: 客户端的Socket连接
+    // Value: 客户端对应的用户信息
+    private static final Map<Socket, User> onlineClients = new ConcurrentHashMap<>();
+
 /**
- * 处理一个客户端的请求
+ * 广播聊天消息给所有其他客户端（排除发送者自己）
+ * @param message 要广播的消息
+ * @param senderSocket 消息发送者的Socket（用于排除自己）
+ */
+    private static void broadcastMessage(Message message, Socket senderSocket) {
+        // 遍历在线客户端映射表的所有条目
+        for (Map.Entry<Socket, User> entry : onlineClients.entrySet()) {
+            Socket clientSocket = entry.getKey();
+            // 排除消息发送者自己，不然自己也会收到自己发的消息
+            if (!clientSocket.equals(senderSocket)) {
+                try {
+                    NetworkUtils.sendMessage(clientSocket, message);
+                } catch (IOException e) {
+                    logger.error("向客户端 [{}] 广播消息失败", entry.getValue().getUsername(), e);
+                }
+            }
+        }
+    }
+
+    /**
+     * 广播系统消息给所有客户端
+     * @param content 系统消息内容
+     */
+    private static void broadcastSystemMessage(String content) {
+        User systemUser = new User("system", "System");
+        Message systemMessage = new Message(systemUser, content);
+        // 系统消息不需要排除任何人，发给所有客户端
+        for (Map.Entry<Socket, User> entry : onlineClients.entrySet()) {
+            try {
+                NetworkUtils.sendMessage(entry.getKey(), systemMessage);
+            } catch (IOException e) {
+                logger.error("向客户端 [{}] 广播系统消息失败", entry.getValue().getUsername(), e);
+            }
+        }
+    }
+/**
+ * 处理客户端的请求
  * @param clientSocket 客户端的Socket连接
  */
     private static void handleClient(Socket clientSocket) {
@@ -38,27 +81,43 @@ public class Server {
         try {
             logger.info("[{}] 开始处理这个客户端的请求。", clientName);
 
-            // 循环读取客户端发送的消息
+            // 1. 接收客户端发送的第一个消息，假设为登录消息，包含用户信息
+            Message loginMessage = NetworkUtils.receiveMessage(clientSocket);
+            if (loginMessage == null || loginMessage.getSender() == null) {
+                logger.warn("[{}] 客户端未发送有效的登录信息，连接关闭。", clientName);
+                return;
+            }
+
+            User clientUser = loginMessage.getSender();
+            // 2. 将新客户端添加到在线列表
+            onlineClients.put(clientSocket, clientUser);
+            logger.info("[{}] 用户 [{}] 已加入聊天室。当前在线人数: {}", clientName, clientUser.getUsername(), onlineClients.size());
+
+            // 3. 广播系统通知：某某用户加入了聊天室
+            broadcastSystemMessage(clientUser.getUsername() + " 加入了聊天室");
+
+            // 4. 进入消息循环
             Message clientMessage;
             while ((clientMessage = NetworkUtils.receiveMessage(clientSocket)) != null) {
-                // 处理消息：打印日志
-                logger.info("[{}] 收到消息: [{}] {}", clientName, 
-                    clientMessage.getSender().getUsername(), 
-                    clientMessage.getContent());
+                logger.info("[{}] 收到消息: [{}] {}", clientName, clientMessage.getSender().getUsername(), clientMessage.getContent());
 
-                // 构建并发送回复消息
-                User serverUser = new User("server", "ChatServer");
-                Message responseMessage = new Message(serverUser, 
-                    "服务器已收到您的消息: '" + clientMessage.getContent() + "'");
-                NetworkUtils.sendMessage(clientSocket, responseMessage);
-                logger.info("[{}] 已发送回复。", clientName);
+                // 5. 【核心功能】将收到的聊天消息广播给所有其他客户端
+                broadcastMessage(clientMessage, clientSocket); // 排除消息发送者自己
             }
-            
+
             logger.info("[{}] 客户端断开连接。", clientName);
 
         } catch (IOException e) {
             logger.error("[{}] 处理请求时发生异常", clientName, e);
         } finally {
+            // 6. 无论如何，最终都要从在线列表中移除该客户端
+            User removedUser = onlineClients.get(clientSocket);
+            onlineClients.remove(clientSocket);
+            logger.info("[{}] 用户已从在线列表移除。当前在线人数: {}", clientName, onlineClients.size());
+            // 广播系统通知：某某用户离开了聊天室
+            if (removedUser != null) {
+            broadcastSystemMessage(removedUser.getUsername() + " 离开了聊天室");
+        }
             try {
                 clientSocket.close();
             } catch (IOException e) {

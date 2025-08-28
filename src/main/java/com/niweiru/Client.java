@@ -25,7 +25,15 @@ public class Client {
         logger.info("客户端启动，尝试连接服务器 {}:{}", SERVER_IP, SERVER_PORT);
 
         try (Socket socket = new Socket(SERVER_IP, SERVER_PORT);
-             BufferedReader stdIn = new BufferedReader(new InputStreamReader(System.in))) {
+            BufferedReader stdIn = new BufferedReader(new InputStreamReader(System.in))) {
+            
+            // 在Client.java的main方法中，连接成功后，发送消息之前添加：
+            // 创建并发送登录消息
+            User currentUser = new User("001", "Alice"); // 可以写死，未来改成输入
+            Message loginMessage = new Message(currentUser, "---login---");
+            NetworkUtils.sendMessage(socket, loginMessage);
+            logger.info("登录信息已发送");
+            // ... 然后进入原有的消息循环 ...
 
             logger.info("连接服务器成功！请输入消息（输入 'exit' 退出）:");
 
@@ -56,7 +64,6 @@ public class Client {
             // 主程序继续读取用户输入并发送
 
             // 创建一个固定的用户用于演示（未来会实现登录）
-            User currentUser = new User("001", "Alice");
             String userInput;
             
             while (running && (userInput = stdIn.readLine()) != null) {
