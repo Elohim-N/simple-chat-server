@@ -97,13 +97,27 @@ public class Server {
             broadcastSystemMessage(clientUser.getUsername() + " 加入了聊天室");
 
             // 4. 进入消息循环
+            // Message clientMessage;
+            // while ((clientMessage = NetworkUtils.receiveMessage(clientSocket)) != null) {
+            //     logger.info("[{}] 收到消息: [{}] {}", clientName, clientMessage.getSender().getUsername(), clientMessage.getContent());
+
             Message clientMessage;
             while ((clientMessage = NetworkUtils.receiveMessage(clientSocket)) != null) {
-                logger.info("[{}] 收到消息: [{}] {}", clientName, clientMessage.getSender().getUsername(), clientMessage.getContent());
-
-                // 5. 【核心功能】将收到的聊天消息广播给所有其他客户端
-                broadcastMessage(clientMessage, clientSocket); // 排除消息发送者自己
+                String content = clientMessage.getContent();
+                logger.info("[{}] 收到消息: [{}] {}", clientName, clientMessage.getSender().getUsername(), content);
+                
+                // 判断是否是私聊消息（以@开头）
+                if (content.startsWith("@")) {
+                    // 处理私聊消息
+                    handlePrivateMessage(clientMessage, clientSocket);
+                } else {
+                    // 处理广播消息
+                    broadcastMessage(clientMessage, clientSocket);
+                }
             }
+                // 5. 【核心功能】将收到的聊天消息广播给所有其他客户端
+            //     broadcastMessage(clientMessage, clientSocket); // 排除消息发送者自己
+            // }
 
             logger.info("[{}] 客户端断开连接。", clientName);
 
@@ -123,6 +137,77 @@ public class Server {
             } catch (IOException e) {
                 logger.error("[{}] 关闭连接时发生异常", clientName, e);
             }
+        }
+    }
+
+    /**
+     * 处理私聊消息
+     * @param message 原始消息
+     * @param senderSocket 发送者的Socket
+     */
+    private static void handlePrivateMessage(Message message, Socket senderSocket) {
+        String content = message.getContent();
+        // 解析消息格式：@username message
+        int spaceIndex = content.indexOf(' ');
+        if (spaceIndex == -1) {
+            // 如果没有空格，说明格式错误
+            sendSystemMessage(senderSocket, "私聊格式错误，请使用: @用户名 消息内容");
+            return;
+        }
+        
+        String targetUsername = content.substring(1, spaceIndex); // 去掉@，取用户名
+        String privateContent = content.substring(spaceIndex + 1); // 取消息内容
+        
+        // 查找目标用户
+        Socket targetSocket = findSocketByUsername(targetUsername);
+        if (targetSocket == null) {
+            sendSystemMessage(senderSocket, "用户 " + targetUsername + " 不存在或不在线");
+            return;
+        }
+        
+        // 创建私聊消息（可以修改原消息或创建新消息）
+        Message privateMessage = new Message(message.getSender(), privateContent);
+        privateMessage.setType("private"); // 可以添加类型字段区分
+        
+        try {
+            // 发送私聊消息给目标用户
+            NetworkUtils.sendMessage(targetSocket, privateMessage);
+            // 可选：也发送给发送者自己，像许多聊天软件那样
+            NetworkUtils.sendMessage(senderSocket, privateMessage);
+            logger.info("私聊消息已从 [{}] 发送给 [{}]", 
+                    message.getSender().getUsername(), targetUsername);
+        } catch (IOException e) {
+            logger.error("发送私聊消息失败", e);
+            sendSystemMessage(senderSocket, "发送私聊消息失败");
+        }
+    }
+
+    /**
+     * 根据用户名查找对应的Socket连接
+     * @param username 要查找的用户名
+     * @return 对应用户的Socket，如果找不到返回null
+     */
+    private static Socket findSocketByUsername(String username) {
+        for (Map.Entry<Socket, User> entry : onlineClients.entrySet()) {
+            if (username.equals(entry.getValue().getUsername())) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 向指定客户端发送系统消息
+     * @param socket 目标客户端Socket
+     * @param content 消息内容
+     */
+    private static void sendSystemMessage(Socket socket, String content) {
+        try {
+            User systemUser = new User("system", "System");
+            Message systemMessage = new Message(systemUser, content);
+            NetworkUtils.sendMessage(socket, systemMessage);
+        } catch (IOException e) {
+            logger.error("发送系统消息失败", e);
         }
     }
 
