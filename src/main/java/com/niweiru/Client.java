@@ -21,15 +21,51 @@ public class Client {
 
     private static volatile boolean running = true;
 
+    /**
+     * 从控制台读取用户名
+     */
+    private static String readUsernameFromConsole() {
+        try {
+            BufferedReader consoleReader = new BufferedReader(new InputStreamReader(System.in));
+            return consoleReader.readLine();
+        } catch (IOException e) {
+            logger.error("读取用户名失败", e);
+            return null;
+        }
+    }
+    
+    /**
+     * 生成用户ID（简单实现，实际应用中应从服务器获取）
+     */
+    private static String generateUserId() {
+        return "user_" + System.currentTimeMillis() % 10000;
+    }
+
     public static void main(String[] args) {
         logger.info("客户端启动，尝试连接服务器 {}:{}", SERVER_IP, SERVER_PORT);
+
+        // 读取用户输入的用户名
+        System.out.print("请输入您的用户名: ");
+        String username = readUsernameFromConsole();
+        
+        if (username == null || username.trim().isEmpty()) {
+            logger.error("用户名不能为空");
+            return;
+        }
+        
+        // 使用用户名创建用户对象
+        User currentUser = new User(generateUserId(), username.trim());
+
 
         try (Socket socket = new Socket(SERVER_IP, SERVER_PORT);
             BufferedReader stdIn = new BufferedReader(new InputStreamReader(System.in))) {
             
             // 在Client.java的main方法中，连接成功后，发送消息之前添加：
             // 创建并发送登录消息
-            User currentUser = new User("001", "Alice"); // 可以写死，未来改成输入
+            // User currentUser = new User("001", "Alice");  可以写死，未来改成输入
+
+            logger.info("连接服务器成功！");
+
             Message loginMessage = new Message(currentUser, "---login---");
             NetworkUtils.sendMessage(socket, loginMessage);
             logger.info("登录信息已发送");

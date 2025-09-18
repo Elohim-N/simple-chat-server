@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -35,6 +36,8 @@ public class Server {
     // Key: 客户端的Socket连接
     // Value: 客户端对应的用户信息
     private static final Map<Socket, User> onlineClients = new ConcurrentHashMap<>();
+    // 在Server类中添加一个用户名字典，用于快速查找用户名是否已存在
+    private static final Set<String> onlineUsernames = ConcurrentHashMap.newKeySet();
 
 /**
  * 广播聊天消息给所有其他客户端（排除发送者自己）
@@ -77,68 +80,86 @@ public class Server {
  * @param clientSocket 客户端的Socket连接
  */
     private static void handleClient(Socket clientSocket) {
-        String clientName = clientSocket.getRemoteSocketAddress().toString();
-        try {
-            logger.info("[{}] 开始处理这个客户端的请求。", clientName);
+    String clientName = clientSocket.getRemoteSocketAddress().toString();
+    // 将 clientUser 声明在 try 块外部，使其在 finally 块中可见
+    User clientUser = null;
+    
+    try {
+        logger.info("[{}] 开始处理这个客户端的请求。", clientName);
 
-            // 1. 接收客户端发送的第一个消息，假设为登录消息，包含用户信息
-            Message loginMessage = NetworkUtils.receiveMessage(clientSocket);
-            if (loginMessage == null || loginMessage.getSender() == null) {
-                logger.warn("[{}] 客户端未发送有效的登录信息，连接关闭。", clientName);
-                return;
-            }
-
-            User clientUser = loginMessage.getSender();
-            // 2. 将新客户端添加到在线列表
-            onlineClients.put(clientSocket, clientUser);
-            logger.info("[{}] 用户 [{}] 已加入聊天室。当前在线人数: {}", clientName, clientUser.getUsername(), onlineClients.size());
-
-            // 3. 广播系统通知：某某用户加入了聊天室
-            broadcastSystemMessage(clientUser.getUsername() + " 加入了聊天室");
-
-            // 4. 进入消息循环
-            // Message clientMessage;
-            // while ((clientMessage = NetworkUtils.receiveMessage(clientSocket)) != null) {
-            //     logger.info("[{}] 收到消息: [{}] {}", clientName, clientMessage.getSender().getUsername(), clientMessage.getContent());
-
-            Message clientMessage;
-            while ((clientMessage = NetworkUtils.receiveMessage(clientSocket)) != null) {
-                String content = clientMessage.getContent();
-                logger.info("[{}] 收到消息: [{}] {}", clientName, clientMessage.getSender().getUsername(), content);
-                
-                // 判断是否是私聊消息（以@开头）
-                if (content.startsWith("@")) {
-                    // 处理私聊消息
-                    handlePrivateMessage(clientMessage, clientSocket);
-                } else {
-                    // 处理广播消息
-                    broadcastMessage(clientMessage, clientSocket);
-                }
-            }
-                // 5. 【核心功能】将收到的聊天消息广播给所有其他客户端
-            //     broadcastMessage(clientMessage, clientSocket); // 排除消息发送者自己
-            // }
-
-            logger.info("[{}] 客户端断开连接。", clientName);
-
-        } catch (IOException e) {
-            logger.error("[{}] 处理请求时发生异常", clientName, e);
-        } finally {
-            // 6. 无论如何，最终都要从在线列表中移除该客户端
-            User removedUser = onlineClients.get(clientSocket);
-            onlineClients.remove(clientSocket);
-            logger.info("[{}] 用户已从在线列表移除。当前在线人数: {}", clientName, onlineClients.size());
-            // 广播系统通知：某某用户离开了聊天室
-            if (removedUser != null) {
-            broadcastSystemMessage(removedUser.getUsername() + " 离开了聊天室");
+        // 1. 接收客户端发送的第一个消息，假设为登录消息，包含用户信息
+        // 将 loginMessage 声明在 try 块内部是可以的，因为我们只需要在 try 块中使用它
+        Message loginMessage = NetworkUtils.receiveMessage(clientSocket);
+        if (loginMessage == null || loginMessage.getSender() == null) {
+            logger.warn("[{}] 客户端未发送有效的登录信息，连接关闭。", clientName);
+            return;
         }
-            try {
-                clientSocket.close();
-            } catch (IOException e) {
-                logger.error("[{}] 关闭连接时发生异常", clientName, e);
+
+        // 使用已声明的 clientUser 变量，不要再次声明
+        clientUser = loginMessage.getSender();
+        String username = clientUser.getUsername();
+
+        // 检查用户名是否已在线
+        if (onlineUsernames.contains(username)) {
+            sendSystemMessage(clientSocket, "用户名 " + username + " 已被使用，请选择其他用户名");
+            clientSocket.close();
+            return;
+        }
+
+        // 用户名可用，添加到在线集合
+        onlineUsernames.add(username);
+        onlineClients.put(clientSocket, clientUser);
+        logger.info("[{}] 用户 [{}] 已加入聊天室。当前在线人数: {}", clientName, username, onlineClients.size());
+
+        // 广播系统通知：某某用户加入了聊天室
+        broadcastSystemMessage(username + " 加入了聊天室");
+
+        // 4. 进入消息循环
+        Message clientMessage;
+        while ((clientMessage = NetworkUtils.receiveMessage(clientSocket)) != null) {
+            String content = clientMessage.getContent();
+            logger.info("[{}] 收到消息: [{}] {}", clientName, clientUser.getUsername(), content);
+            
+            // 判断是否是命令（以/开头）
+            if (content.startsWith("/")) {
+                // 处理命令
+                handleCommand(content, clientSocket);
+            } 
+            // 判断是否是私聊消息（以@开头）
+            else if (content.startsWith("@")) {
+                // 处理私聊消息
+                handlePrivateMessage(clientMessage, clientSocket);
+            } else {
+                // 处理广播消息
+                broadcastMessage(clientMessage, clientSocket);
             }
+        }
+
+        logger.info("[{}] 客户端断开连接。", clientName);
+
+    } catch (IOException e) {
+        logger.error("[{}] 处理请求时发生异常", clientName, e);
+    } finally {
+        // 6. 无论如何，最终都要从在线列表中移除该客户端
+        // 先获取用户信息，然后再移除
+        if (clientUser != null) {
+            onlineUsernames.remove(clientUser.getUsername());
+        }
+        onlineClients.remove(clientSocket);
+        logger.info("[{}] 用户已从在线列表移除。当前在线人数: {}", clientName, onlineClients.size());
+        
+        // 广播系统通知：某某用户离开了聊天室
+        if (clientUser != null) {
+            broadcastSystemMessage(clientUser.getUsername() + " 离开了聊天室");
+        }
+        
+        try {
+            clientSocket.close();
+        } catch (IOException e) {
+            logger.error("[{}] 关闭连接时发生异常", clientName, e);
         }
     }
+}
 
     /**
      * 处理私聊消息
@@ -209,6 +230,17 @@ public class Server {
         } catch (IOException e) {
             logger.error("发送系统消息失败", e);
         }
+    }
+    private static void handleCommand(String command, Socket senderSocket) {
+        if ("/list".equals(command)) {
+            // 响应/list命令，列出所有在线用户
+            StringBuilder userList = new StringBuilder("在线用户:\n");
+            for (User user : onlineClients.values()) {
+                userList.append("- ").append(user.getUsername()).append("\n");
+            }
+            sendSystemMessage(senderSocket, userList.toString());
+        }
+        // 可以扩展其他命令，如/help等
     }
 
     // public static void main(String[] args) {
